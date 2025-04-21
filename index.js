@@ -23,19 +23,34 @@ const bedrockConfig = {
 
 // Create the Java bot instance
 let javaBot = null;
+let bedrockClient = null;
+
+// Start the connection process
 if (javaEnabled) {
     console.log('Java Client - Attempting to connect with the following configuration:');
     console.log(JSON.stringify(javaConfig, null, 2));
-    javaBot = mineflayer.createBot(javaConfig);
-    setupJavaEventHandlers(javaBot);
+    connectJava();
 } else {
     console.log('Java Client - Disabled in configuration');
     // If Java is disabled, connect to Bedrock immediately
     connectBedrock();
 }
 
-// Initialize Bedrock client if enabled
-let bedrockClient = null;
+setupConsoleInput();
+
+// Function to connect to Java
+function connectJava() {
+    if (!javaEnabled) return;
+    
+    try {
+        javaBot = mineflayer.createBot(javaConfig);
+        setupJavaEventHandlers(javaBot);
+    } catch (error) {
+        console.error('Failed to create Java client:', error);
+        console.log('[JAVA] Attempting to reconnect in 10 seconds...');
+        setTimeout(connectJava, 10000);
+    }
+}
 
 // Function to connect to Bedrock
 function connectBedrock() {
@@ -55,23 +70,24 @@ function connectBedrock() {
         setupBedrockEventHandlers(bedrockClient);
     } catch (error) {
         console.error('Failed to create Bedrock client:', error);
+        console.log('[BEDROCK] Attempting to reconnect in 10 seconds...');
+        setTimeout(connectBedrock, 10000);
     }
 }
-setupConsoleInput();
 
-    function setupJavaEventHandlers(botInstance) {
-        // Login event
-        botInstance.on('login', () => {
-            console.log(`[JAVA] Successfully connected to ${javaConfig.host}:${javaConfig.port}`);
-            console.log(`[JAVA] Logged in as ${botInstance.username}`);
-            console.log('[JAVA] AFK mode active - The bot will stay connected without moving');
-            
-            // Connect to Bedrock after Java has successfully connected
-            if (bedrockEnabled) {
-                console.log('[BEDROCK] Waiting 10 seconds before connecting to avoid authentication conflicts...');
-                setTimeout(connectBedrock, 10000);
-            }
-        });
+function setupJavaEventHandlers(botInstance) {
+    // Login event
+    botInstance.on('login', () => {
+        console.log(`[JAVA] Successfully connected to ${javaConfig.host}:${javaConfig.port}`);
+        console.log(`[JAVA] Logged in as ${botInstance.username}`);
+        console.log('[JAVA] AFK mode active - The bot will stay connected without moving');
+        
+        // Connect to Bedrock after Java has successfully connected
+        if (bedrockEnabled) {
+            console.log('[BEDROCK] Waiting 10 seconds before connecting to avoid authentication conflicts...');
+            setTimeout(connectBedrock, 10000);
+        }
+    });
     
     // Error handling
     botInstance.on('error', (err) => {
@@ -104,6 +120,15 @@ setupConsoleInput();
         console.error('\n[JAVA] Full Error Stack:');
         console.error(err.stack);
         console.error('[JAVA] === END ERROR DETAILS ===');
+        
+        // For authentication errors, we should retry
+        if (err.message && (
+            err.message.includes('authentication') || 
+            err.message.includes('Failed to obtain profile data')
+        )) {
+            console.log('[JAVA] Authentication error detected. Attempting to reconnect in 10 seconds...');
+            setTimeout(connectJava, 10000);
+        }
     });
     
     // Kicked event
@@ -156,6 +181,12 @@ setupConsoleInput();
             botInstance.chat('Pong! I am a Java AFK bot.');
         }
     });
+    
+    // Add message event to catch all messages including system messages
+    botInstance.on('message', (message) => {
+        // This will log all messages, including system messages and command responses
+        console.log(`[JAVA] Message: ${message.toString()}`);
+    });
 }
 
 function setupBedrockEventHandlers(client) {
@@ -181,6 +212,10 @@ function setupBedrockEventHandlers(client) {
         console.error('[BEDROCK] Full Error Stack:');
         console.error(err.stack);
         console.error('[BEDROCK] === END ERROR DETAILS ===');
+        
+        // Attempt to reconnect after an error
+        console.log('[BEDROCK] Error occurred. Attempting to reconnect in 10 seconds...');
+        setTimeout(connectBedrock, 10000);
     });
     
     client.on('text', (packet) => {
@@ -202,49 +237,16 @@ function reconnectJava() {
     if (!javaEnabled) return; // Don't reconnect if Java is disabled
     
     console.log('[JAVA] Reconnecting...');
-    console.log('[JAVA] Attempting to connect with the following configuration:');
-    console.log(JSON.stringify(javaConfig, null, 2));
-    
-    // Create a new bot instance
-    javaBot = mineflayer.createBot(javaConfig);
-    
-    // Reattach all event handlers
-    if(javaBot) {
-        setupJavaEventHandlers(javaBot);
-    }
+    connectJava();
 }
 
 function reconnectBedrock() {
     if (!bedrockEnabled) return;
     
     console.log('[BEDROCK] Reconnecting...');
-    console.log('[BEDROCK] Attempting to connect with the following configuration:');
-    console.log(JSON.stringify(bedrockConfig, null, 2));
-    
-    try {
-        // Create a new client instance
-        bedrockClient = bedrock.createClient({
-            host: bedrockConfig.host,
-            port: bedrockConfig.port,
-            username: bedrockConfig.username,
-            version: bedrockConfig.version
-        });
-        
-        // Reattach all event handlers
-        setupBedrockEventHandlers(bedrockClient);
-    } catch (error) {
-        console.error('[BEDROCK] Failed to reconnect:', error);
-        
-        // Check if the error is related to version compatibility
-        if (error.message && error.message.includes('version')) {
-            console.error('[BEDROCK] Version compatibility issue detected. Please update the BEDROCK_VERSION in your .env file.');
-            console.error('[BEDROCK] Server supports: 1.21.50-1.21.51, 1.21.60-1.21.62, 1.21.70');
-        }
-        
-        console.log('[BEDROCK] Attempting to reconnect in 10 seconds...');
-        setTimeout(reconnectBedrock, 10000);
-    }
+    connectBedrock();
 }
+
 // Keep the process running
 process.on('SIGINT', () => {
     console.log('Disconnecting bots...');
@@ -303,9 +305,10 @@ function setupConsoleInput() {
                     type: 'chat',
                     needs_translation: false,
                     source_name: bedrockConfig.username,
+                    message: message,
+                    parameters: [], // Add missing parameters array
                     xuid: '',
-                    platform_chat_id: '',
-                    message: message
+                    platform_chat_id: ''
                 });
             } else {
                 console.log('[BEDROCK] Client is not connected or disabled');
@@ -321,7 +324,7 @@ function setupConsoleInput() {
                     type: 'chat', 
                     needs_translation: false,
                     source_name: bedrockConfig.username,
-                    message: message,
+                    message: trimmedLine, // Fixed: use trimmedLine instead of message
                     parameters: [], // Add missing parameters array
                     xuid: '',
                     platform_chat_id: ''
