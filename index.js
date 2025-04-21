@@ -30,11 +30,17 @@ if (javaEnabled) {
     setupJavaEventHandlers(javaBot);
 } else {
     console.log('Java Client - Disabled in configuration');
+    // If Java is disabled, connect to Bedrock immediately
+    connectBedrock();
 }
 
 // Initialize Bedrock client if enabled
 let bedrockClient = null;
-if (bedrockEnabled) {
+
+// Function to connect to Bedrock
+function connectBedrock() {
+    if (!bedrockEnabled) return;
+    
     console.log('Bedrock Client - Attempting to connect with the following configuration:');
     console.log(JSON.stringify(bedrockConfig, null, 2));
     
@@ -53,13 +59,19 @@ if (bedrockEnabled) {
 }
 setupConsoleInput();
 
-function setupJavaEventHandlers(botInstance) {
-    // Login event
-    botInstance.on('login', () => {
-        console.log(`[JAVA] Successfully connected to ${javaConfig.host}:${javaConfig.port}`);
-        console.log(`[JAVA] Logged in as ${botInstance.username}`);
-        console.log('[JAVA] AFK mode active - The bot will stay connected without moving');
-    });
+    function setupJavaEventHandlers(botInstance) {
+        // Login event
+        botInstance.on('login', () => {
+            console.log(`[JAVA] Successfully connected to ${javaConfig.host}:${javaConfig.port}`);
+            console.log(`[JAVA] Logged in as ${botInstance.username}`);
+            console.log('[JAVA] AFK mode active - The bot will stay connected without moving');
+            
+            // Connect to Bedrock after Java has successfully connected
+            if (bedrockEnabled) {
+                console.log('[BEDROCK] Waiting 10 seconds before connecting to avoid authentication conflicts...');
+                setTimeout(connectBedrock, 10000);
+            }
+        });
     
     // Error handling
     botInstance.on('error', (err) => {
