@@ -24,6 +24,7 @@ const bedrockConfig = {
 // Create the Java bot instance
 let javaBot = null;
 let bedrockClient = null;
+let bedrockPingInterval = null;
 
 // Start the connection process
 if (javaEnabled) {
@@ -70,6 +71,17 @@ function connectBedrock() {
         setupBedrockEventHandlers(bedrockClient);
     } catch (error) {
         console.error('Failed to create Bedrock client:', error);
+        
+        // Check for specific error types to provide better feedback
+        if (error.message && error.message.includes('version')) {
+            console.error('[BEDROCK] Version compatibility issue detected. Please update the BEDROCK_VERSION in your .env file.');
+            console.error('[BEDROCK] Server supports: 1.21.50-1.21.51, 1.21.60-1.21.62, 1.21.70');
+        } else if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+            console.error('[BEDROCK] Connection to server failed. Please check if the server is running and accessible.');
+        } else if (error.message && error.message.includes('authentication')) {
+            console.error('[BEDROCK] Authentication failed. Please check your username.');
+        }
+        
         console.log('[BEDROCK] Attempting to reconnect in 10 seconds...');
         setTimeout(connectBedrock, 10000);
     }
@@ -190,16 +202,48 @@ function setupJavaEventHandlers(botInstance) {
 }
 
 function setupBedrockEventHandlers(client) {
+    // Set up a ping interval to keep the connection alive
+    if (bedrockPingInterval) {
+        clearInterval(bedrockPingInterval);
+    }
+    
     client.on('connect', () => {
         console.log(`[BEDROCK] Successfully connected to ${bedrockConfig.host}:${bedrockConfig.port}`);
         console.log(`[BEDROCK] Logged in as ${bedrockConfig.username}`);
         console.log('[BEDROCK] AFK mode active - The client will stay connected without moving');
+        
+        // Set up a ping interval to keep the connection alive
+        bedrockPingInterval = setInterval(() => {
+            try {
+                if (client && client.connected) {
+                    // Send a keep-alive packet if the client supports it
+                    if (typeof client.write === 'function') {
+                        client.write('level_sound_event', {
+                            sound_id: 0,
+                            position: { x: 0, y: 0, z: 0 },
+                            extra_data: 0,
+                            entity_type: '',
+                            is_baby_mob: false,
+                            is_global: false
+                        });
+                    }
+                }
+            } catch (e) {
+                // Ignore errors in the ping
+            }
+        }, 30000); // Every 30 seconds
     });
     
     client.on('disconnect', (packet) => {
         console.log('[BEDROCK] === DISCONNECTED FROM SERVER ===');
         console.log('[BEDROCK] Reason:', packet?.reason || 'Unknown');
         console.log('[BEDROCK] === END DISCONNECT DETAILS ===');
+        
+        // Clear the ping interval
+        if (bedrockPingInterval) {
+            clearInterval(bedrockPingInterval);
+            bedrockPingInterval = null;
+        }
         
         // Add reconnection logic
         console.log('[BEDROCK] Attempting to reconnect in 5 seconds...');
@@ -212,6 +256,13 @@ function setupBedrockEventHandlers(client) {
         console.error('[BEDROCK] Full Error Stack:');
         console.error(err.stack);
         console.error('[BEDROCK] === END ERROR DETAILS ===');
+        
+        // Check for network-related errors
+        if (err.code === 'ECONNRESET' || err.code === 'EPIPE') {
+            console.error('[BEDROCK] Network connection interrupted.');
+        } else if (err.message && err.message.includes('timed out')) {
+            console.error('[BEDROCK] Connection timed out.');
+        }
         
         // Attempt to reconnect after an error
         console.log('[BEDROCK] Error occurred. Attempting to reconnect in 10 seconds...');
@@ -243,6 +294,12 @@ function reconnectJava() {
 function reconnectBedrock() {
     if (!bedrockEnabled) return;
     
+    // Clear any existing ping interval
+    if (bedrockPingInterval) {
+        clearInterval(bedrockPingInterval);
+        bedrockPingInterval = null;
+    }
+    
     console.log('[BEDROCK] Reconnecting...');
     connectBedrock();
 }
@@ -250,6 +307,13 @@ function reconnectBedrock() {
 // Keep the process running
 process.on('SIGINT', () => {
     console.log('Disconnecting bots...');
+    
+    // Clear any existing ping interval
+    if (bedrockPingInterval) {
+        clearInterval(bedrockPingInterval);
+        bedrockPingInterval = null;
+    }
+    
     if (javaBot) {
         javaBot.quit();
     }
@@ -270,6 +334,7 @@ function setupConsoleInput() {
     console.log('Chat input enabled. Type messages to send to the server.');
     console.log('Use "/java <message>" to send a message from the Java client');
     console.log('Use "/bedrock <message>" to send a message from the Bedrock client');
+    console.log('Use "/clear" to clear the console');
     console.log('Use "/quit" to disconnect and exit');
     
     rl.prompt();
@@ -279,6 +344,13 @@ function setupConsoleInput() {
         
         if (trimmedLine === '/quit') {
             console.log('Disconnecting bots...');
+            
+            // Clear any existing ping interval
+            if (bedrockPingInterval) {
+                clearInterval(bedrockPingInterval);
+                bedrockPingInterval = null;
+            }
+            
             if (javaBot) javaBot.quit();
             if (bedrockClient) bedrockClient.disconnect();
             process.exit();
@@ -306,7 +378,7 @@ function setupConsoleInput() {
                     needs_translation: false,
                     source_name: bedrockConfig.username,
                     message: message,
-                    parameters: [], // Add missing parameters array
+                    parameters: [],
                     xuid: '',
                     platform_chat_id: ''
                 });
@@ -324,8 +396,8 @@ function setupConsoleInput() {
                     type: 'chat', 
                     needs_translation: false,
                     source_name: bedrockConfig.username,
-                    message: trimmedLine, // Fixed: use trimmedLine instead of message
-                    parameters: [], // Add missing parameters array
+                    message: trimmedLine,
+                    parameters: [],
                     xuid: '',
                     platform_chat_id: ''
                 });
@@ -339,6 +411,13 @@ function setupConsoleInput() {
     
     rl.on('close', () => {
         console.log('Disconnecting bots...');
+        
+        // Clear any existing ping interval
+        if (bedrockPingInterval) {
+            clearInterval(bedrockPingInterval);
+            bedrockPingInterval = null;
+        }
+        
         if (javaBot) javaBot.quit();
         if (bedrockClient) bedrockClient.disconnect();
         process.exit();
