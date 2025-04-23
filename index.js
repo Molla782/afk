@@ -61,21 +61,50 @@ function connectBedrock() {
     console.log(JSON.stringify(bedrockConfig, null, 2));
     
     try {
+        // Add a timeout to detect connection issues
+        const connectionTimeout = setTimeout(() => {
+            console.error('[BEDROCK] Connection attempt timed out after 30 seconds');
+            console.error('[BEDROCK] This may indicate network issues or server incompatibility');
+            console.log('[BEDROCK] Attempting to reconnect in 10 seconds...');
+            setTimeout(connectBedrock, 10000);
+        }, 30000);
+        
         bedrockClient = bedrock.createClient({
             host: bedrockConfig.host,
             port: bedrockConfig.port,
             username: bedrockConfig.username,
-            version: bedrockConfig.version
+            version: bedrockConfig.version,
+            connectTimeout: 20000, // 20 second timeout
+            skipPing: false // Make sure we ping the server first
+        });
+        
+        // Remove this spawn handler since it's already in setupBedrockEventHandlers
+        // bedrockClient.once('spawn', () => {
+        //     clearTimeout(connectionTimeout);
+        //     console.log('[BEDROCK] Successfully spawned in the world');
+        // });
+        
+        // Just clear the timeout without logging the message
+        bedrockClient.once('spawn', () => {
+            clearTimeout(connectionTimeout);
         });
         
         setupBedrockEventHandlers(bedrockClient);
+        
+        // Clear the timeout if we connect successfully
+        bedrockClient.once('connect', () => {
+            clearTimeout(connectionTimeout);
+        });
     } catch (error) {
-        console.error('Failed to create Bedrock client:', error);
+        console.error('[BEDROCK] Failed to create Bedrock client:', error);
         
         // Check for specific error types to provide better feedback
         if (error.message && error.message.includes('version')) {
             console.error('[BEDROCK] Version compatibility issue detected. Please update the BEDROCK_VERSION in your .env file.');
             console.error('[BEDROCK] Server supports: 1.21.50-1.21.51, 1.21.60-1.21.62, 1.21.70');
+            // Try with a different version
+            console.log('[BEDROCK] Attempting to connect with version 1.20.60...');
+            bedrockConfig.version = '1.20.60';
         } else if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
             console.error('[BEDROCK] Connection to server failed. Please check if the server is running and accessible.');
         } else if (error.message && error.message.includes('authentication')) {
@@ -234,6 +263,24 @@ function setupBedrockEventHandlers(client) {
         }, 30000); // Every 30 seconds
     });
     
+    // Add a login packet handler to see if we're getting that far
+    client.on('login', (packet) => {
+        console.log('[BEDROCK] Received login packet from server');
+    });
+    
+    // Add a spawn handler to confirm we're fully connected
+    client.on('spawn', () => {
+        console.log('[BEDROCK] Successfully spawned in the world');
+    });
+    
+    // Add a packet handler to see all incoming packets for debugging
+    client.on('packet', (packet, meta) => {
+        // Fix: Check if meta exists before accessing its properties
+        if (meta && meta.name === 'disconnect') {
+            console.log(`[BEDROCK] Disconnect packet received: ${JSON.stringify(packet)}`);
+        }
+    });
+    
     client.on('disconnect', (packet) => {
         console.log('[BEDROCK] === DISCONNECTED FROM SERVER ===');
         console.log('[BEDROCK] Reason:', packet?.reason || 'Unknown');
@@ -262,6 +309,8 @@ function setupBedrockEventHandlers(client) {
             console.error('[BEDROCK] Network connection interrupted.');
         } else if (err.message && err.message.includes('timed out')) {
             console.error('[BEDROCK] Connection timed out.');
+        } else if (err.message && err.message.includes('sendto failed')) {
+            console.error('[BEDROCK] Network error: sendto failed. This may indicate the server does not accept Bedrock connections.');
         }
         
         // Attempt to reconnect after an error
